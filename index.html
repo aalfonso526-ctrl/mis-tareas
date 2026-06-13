@@ -73,7 +73,8 @@
     font-weight: 500;
     text-transform: capitalize;
   }
-  .header-right { display: flex; align-items: center; gap: 8px; }
+  .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .hdr-btn.bell-on { color: var(--orange); background: var(--orange-soft); }
   .hdr-btn {
     width: 34px; height: 34px;
     border: none;
@@ -483,6 +484,14 @@
   .dot.done { background: var(--green); }
   .dot.future { background: transparent; border: 1px dashed rgba(118,118,128,0.45); box-sizing: border-box; }
 
+  /* ---------- Recordatorios ---------- */
+  .rem-toggle {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 600;
+    padding: 4px 0 16px; cursor: pointer;
+  }
+  .rem-toggle input { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
+
   /* ---------- Empty state ---------- */
   .empty {
     grid-column: 1 / -1;
@@ -575,7 +584,7 @@
     color: var(--text-secondary);
     margin-bottom: 7px;
   }
-  .field input[type="text"], .field input[type="date"], .field textarea, .field select {
+  .field input[type="text"], .field input[type="date"], .field input[type="time"], .field textarea, .field select {
     width: 100%;
     border: 1.5px solid rgba(0,0,0,0.1);
     border-radius: 12px;
@@ -719,6 +728,9 @@
         <button class="hdr-btn" id="icsBtn" title="Exportar a calendario (.ics)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
         </button>
+        <button class="hdr-btn" id="remBtn" title="Recordatorios">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+        </button>
         <button class="hdr-btn" id="themeBtn" title="Cambiar tema"></button>
         <button class="hdr-btn" id="cloudBtn" title="Sincronización en la nube" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 .4-8.98 6 6 0 0 0-11.8 1.2A4.2 4.2 0 0 0 7 19z"/></svg>
@@ -838,6 +850,27 @@
   </div>
 </div>
 
+<!-- Modal recordatorios -->
+<div class="modal-overlay" id="remModal">
+  <div class="modal">
+    <h3>Recordatorios</h3>
+    <p class="stats-note" id="remStatus" style="margin-bottom:18px"></p>
+    <label class="rem-toggle" for="remEnabled">
+      <input type="checkbox" id="remEnabled">
+      <span>Activar aviso diario de mis tareas</span>
+    </label>
+    <div class="field" id="remTimeField">
+      <label>Avisarme a partir de las</label>
+      <input type="time" id="remTime" value="09:00">
+    </div>
+    <p class="stats-note">Recibirás un resumen de las tareas que vencen hoy, las atrasadas y tus hábitos pendientes. En Android, con la app instalada, el aviso llega aunque esté cerrada (la hora es aproximada, nunca antes de la que elijas).</p>
+    <div class="modal-buttons">
+      <button class="btn btn-secondary" id="remTest">Probar ahora</button>
+      <button class="btn btn-primary" id="remSave">Guardar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal estadísticas -->
 <div class="modal-overlay" id="statsModal">
   <div class="modal">
@@ -887,6 +920,43 @@
     state.updatedAt = Date.now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     if (cloud && cloud.user) pushStateDebounced();
+    mirrorStateToIdb();
+  }
+
+  /* IndexedDB: espejo de los datos para que el service worker pueda
+     calcular los recordatorios cuando la app está cerrada (localStorage
+     no es accesible desde el service worker). */
+  function idbOpen() {
+    return new Promise(function (res, rej) {
+      var r = indexedDB.open("mis-tareas-db", 1);
+      r.onupgradeneeded = function () { r.result.createObjectStore("kv"); };
+      r.onsuccess = function () { res(r.result); };
+      r.onerror = function () { rej(r.error); };
+    });
+  }
+  function idbPut(key, val) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction("kv", "readwrite");
+        tx.objectStore("kv").put(val, key);
+        tx.oncomplete = function () { res(); };
+        tx.onerror = function () { rej(tx.error); };
+      });
+    });
+  }
+  function idbGet(key) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction("kv", "readonly");
+        var rq = tx.objectStore("kv").get(key);
+        rq.onsuccess = function () { res(rq.result); };
+        rq.onerror = function () { rej(rq.error); };
+      });
+    });
+  }
+  function mirrorStateToIdb() {
+    if (!("indexedDB" in window)) return;
+    idbPut("state", { tasks: state.tasks }).catch(function () {});
   }
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -1670,7 +1740,7 @@
 
   /* ---------- Escape cierra modales ---------- */
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { closeTaskModal(); closeGoalModal(); closeStats(); }
+    if (e.key === "Escape") { closeTaskModal(); closeGoalModal(); closeStats(); remModal.classList.remove("open"); }
   });
 
   /* ---------- Tema claro / oscuro / automático ---------- */
@@ -2035,10 +2105,172 @@
   }
   cloudInit();
 
+  /* ==========================================================
+     Recordatorios (notificaciones locales)
+     ========================================================== */
+  var REM_KEY = "todo-reminders";
+  var reminders = loadReminders();
+  var remModal = document.getElementById("remModal");
+  var notifSupported = "Notification" in window;
+
+  function loadReminders() {
+    try {
+      var r = JSON.parse(localStorage.getItem(REM_KEY));
+      if (r && typeof r.enabled === "boolean" && r.time) return r;
+    } catch (e) {}
+    return { enabled: false, time: "09:00" };
+  }
+  function saveReminders() {
+    localStorage.setItem(REM_KEY, JSON.stringify(reminders));
+    /* Espejo en IndexedDB para el service worker (conserva lastNotified) */
+    idbGet("reminders").then(function (prev) {
+      return idbPut("reminders", {
+        enabled: reminders.enabled,
+        time: reminders.time,
+        lastNotified: prev && prev.lastNotified ? prev.lastNotified : null
+      });
+    }).catch(function () {});
+    mirrorStateToIdb();
+  }
+
+  /* Tareas a recordar hoy: vencen hoy, atrasadas, o hábitos diarios pendientes */
+  function reminderItems() {
+    var today = todayStr();
+    return state.tasks.filter(function (t) {
+      if (t.repeat === "daily") return !(t.history && t.history.indexOf(today) > -1);
+      if (t.done) return false;
+      return t.due && t.due <= today;
+    });
+  }
+
+  function showDigest(force) {
+    if (!notifSupported || Notification.permission !== "granted") return;
+    var items = reminderItems();
+    if (!force && !items.length) return;
+    var title, body;
+    if (items.length) {
+      title = "Tienes " + items.length + " " + (items.length === 1 ? "tarea" : "tareas") + " para hoy";
+      body = items.slice(0, 4).map(function (t) { return "• " + t.title; }).join("\n");
+      if (items.length > 4) body += "\n+" + (items.length - 4) + " más";
+    } else {
+      title = "Mis Tareas";
+      body = "No tienes tareas pendientes para hoy 🎉";
+    }
+    var opts = { body: body, icon: "icon-192.png", badge: "icon-192.png", tag: "daily-digest", renotify: true };
+    if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+      navigator.serviceWorker.ready.then(function (reg) { reg.showNotification(title, opts); })
+        .catch(function () { try { new Notification(title, opts); } catch (e) {} });
+    } else {
+      try { new Notification(title, opts); } catch (e) {}
+    }
+  }
+
+  /* Mientras la app está abierta: comprueba si toca el aviso diario */
+  function checkReminders() {
+    if (!reminders.enabled || !notifSupported || Notification.permission !== "granted") return;
+    var now = new Date();
+    var hm = pad(now.getHours()) + ":" + pad(now.getMinutes());
+    if (hm < reminders.time) return;
+    idbGet("reminders").then(function (r) {
+      if (r && r.lastNotified === todayStr()) return;
+      if (!reminderItems().length) return;
+      showDigest(false);
+      idbPut("reminders", { enabled: reminders.enabled, time: reminders.time, lastNotified: todayStr() });
+    }).catch(function () {});
+  }
+
+  function requestNotifPermission() {
+    return new Promise(function (res) {
+      if (!notifSupported) { res("unsupported"); return; }
+      if (Notification.permission === "granted") { res("granted"); return; }
+      Notification.requestPermission().then(res).catch(function () { res("denied"); });
+    });
+  }
+
+  /* Sincronización periódica en segundo plano (Android/Chrome con PWA instalada):
+     permite los avisos con la app cerrada */
+  function registerPeriodicSync() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.ready.then(function (reg) {
+      if (!("periodicSync" in reg)) return;
+      function reg6h() { reg.periodicSync.register("reminders-check", { minInterval: 6 * 60 * 60 * 1000 }).catch(function () {}); }
+      if (navigator.permissions && navigator.permissions.query) {
+        navigator.permissions.query({ name: "periodic-background-sync" })
+          .then(function (st) { if (st.state === "granted") reg6h(); else reg6h(); })
+          .catch(reg6h);
+      } else { reg6h(); }
+    }).catch(function () {});
+  }
+
+  function updateRemBtn() {
+    var btn = document.getElementById("remBtn");
+    var active = reminders.enabled && notifSupported && Notification.permission === "granted";
+    btn.classList.toggle("bell-on", active);
+    btn.title = active ? "Aviso diario activo a las " + reminders.time : "Recordatorios";
+  }
+
+  function openRemModal() {
+    var status = document.getElementById("remStatus");
+    var enabledBox = document.getElementById("remEnabled");
+    if (!notifSupported) {
+      status.textContent = "Este navegador no admite notificaciones.";
+      enabledBox.checked = false; enabledBox.disabled = true;
+    } else if (Notification.permission === "denied") {
+      status.textContent = "Las notificaciones están bloqueadas en los ajustes del navegador. Habilítalas para este sitio y vuelve a intentarlo.";
+      enabledBox.checked = false;
+    } else {
+      status.textContent = "Te avisaremos una vez al día con tus pendientes.";
+      enabledBox.checked = reminders.enabled;
+    }
+    document.getElementById("remTime").value = reminders.time;
+    remModal.classList.add("open");
+  }
+  function closeRemModal() { remModal.classList.remove("open"); }
+
+  document.getElementById("remBtn").addEventListener("click", openRemModal);
+  remModal.addEventListener("click", function (e) { if (e.target === remModal) closeRemModal(); });
+
+  document.getElementById("remEnabled").addEventListener("change", function () {
+    var self = this;
+    if (self.checked) {
+      requestNotifPermission().then(function (p) {
+        if (p !== "granted") {
+          self.checked = false;
+          document.getElementById("remStatus").textContent = p === "unsupported"
+            ? "Este navegador no admite notificaciones."
+            : "Permiso denegado. Actívalo en los ajustes del navegador para este sitio.";
+        }
+      });
+    }
+  });
+
+  document.getElementById("remTest").addEventListener("click", function () {
+    requestNotifPermission().then(function (p) {
+      if (p === "granted") showDigest(true);
+      else alert("Necesito permiso para mostrar notificaciones. Actívalo cuando el navegador lo pida o en los ajustes del sitio.");
+    });
+  });
+
+  document.getElementById("remSave").addEventListener("click", function () {
+    reminders.time = document.getElementById("remTime").value || "09:00";
+    reminders.enabled = document.getElementById("remEnabled").checked && notifSupported && Notification.permission === "granted";
+    saveReminders();
+    if (reminders.enabled) { registerPeriodicSync(); checkReminders(); }
+    updateRemBtn();
+    closeRemModal();
+  });
+
   /* ---------- PWA: registrar el service worker (solo cuando se sirve por http/https) ---------- */
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
     navigator.serviceWorker.register("sw.js").catch(function () {});
   }
+
+  /* Arranque de recordatorios */
+  saveReminders();          /* asegura el espejo inicial en IndexedDB */
+  updateRemBtn();
+  if (reminders.enabled) { registerPeriodicSync(); checkReminders(); }
+  setInterval(checkReminders, 60000);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) checkReminders(); });
 
   render();
 })();
