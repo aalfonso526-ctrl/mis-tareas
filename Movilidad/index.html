@@ -355,13 +355,19 @@ function save() { localStorage.setItem(STORE_KEY, JSON.stringify(progress)); }
 
 function todayIndex() { return (new Date().getDay() + 6) % 7; }
 
+// Fecha local en formato YYYY-MM-DD. Usamos la fecha local (no toISOString, que
+// convierte a UTC y, en husos negativos como México, adelanta un día por la tarde).
+function isoLocal(d) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
 // Fecha (YYYY-MM-DD) del día `idx` de la semana actual
 function dateOfWeekDay(idx) {
   const now = new Date();
   const monday = new Date(now);
   monday.setDate(now.getDate() - todayIndex());
   monday.setDate(monday.getDate() + idx);
-  return monday.toISOString().slice(0, 10);
+  return isoLocal(monday);
 }
 
 function getDone(dateStr) { return progress[dateStr] || []; }
@@ -386,12 +392,12 @@ function computeStreak() {
   let streak = 0;
   const d = new Date();
   // Si hoy aún no está completo, no rompe la racha: empezamos a contar desde ayer
-  const todayStr = d.toISOString().slice(0, 10);
+  const todayStr = isoLocal(d);
   if (isDayComplete(todayIndex(), todayStr)) streak++;
   for (let i = 1; i < 3650; i++) {
     const day = new Date();
     day.setDate(day.getDate() - i);
-    const ds = day.toISOString().slice(0, 10);
+    const ds = isoLocal(day);
     const idx = (day.getDay() + 6) % 7;
     if (isDayComplete(idx, ds)) streak++;
     else break;
