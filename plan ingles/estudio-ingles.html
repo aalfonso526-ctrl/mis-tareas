@@ -168,6 +168,29 @@
     border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: .78rem; margin-top: 12px;
   }
   .streak { font-size: .9rem; color: var(--warn); margin-top: 4px; }
+
+  /* ── Conmutador de vista e Historial ── */
+  .view-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .view-tabs button {
+    flex: 1; border: 1px solid var(--border); background: var(--card); color: var(--muted);
+    border-radius: 10px; padding: 9px; cursor: pointer; font-size: .85rem; font-weight: 600; transition: all .15s;
+  }
+  .view-tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .hist-stats { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .hist-stat { flex: 1; min-width: 90px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; text-align: center; }
+  .hist-stat .n { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+  .hist-stat .l { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+  .hist-week-h { font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 2px 8px; font-weight: 700; }
+  .hist-day-item { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .hist-day-item.full { border-color: rgba(52,199,89,0.4); }
+  .hist-day-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .hist-day-name { font-weight: 600; font-size: .95rem; }
+  .hist-day-date { color: var(--muted); font-size: .8rem; }
+  .hist-day-meta { font-size: .8rem; color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .hist-day-item.full .hist-day-meta { color: var(--accent2); }
+  .hist-bar { height: 6px; background: var(--card2); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .hist-bar div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .hist-empty { text-align: center; color: var(--muted); padding: 44px 16px; font-size: .9rem; }
 </style>
 <script>
 /* Tema: sigue al sistema y permite que el hub lo imponga (postMessage). */
@@ -193,6 +216,12 @@
 
 <div class="container">
 
+  <div class="view-tabs">
+    <button id="tab-hoy" class="active">Plan</button>
+    <button id="tab-hist">Historial</button>
+  </div>
+
+  <div id="view-plan">
   <div class="days" id="dayTabs"></div>
 
   <h2 class="day-title" id="dayTitle"></h2>
@@ -219,6 +248,12 @@
     <div class="week-summary" id="weekSummary"></div>
     <div class="anki-note">💡 Regla de oro de Anki: nunca tarjetas de palabras sueltas, siempre frases completas. Mazos: <b>English Daily Sentences</b>, <b>My Mistakes</b>, <b>Listening Vocabulary</b>, <b>Useful Questions</b>.</div>
     <button class="reset-btn" id="resetWeek">Reiniciar semana (nueva semana de estudio)</button>
+  </div>
+  </div>
+
+  <div id="view-historial" style="display:none">
+    <div class="hist-stats" id="histStats"></div>
+    <div id="histList"></div>
   </div>
 
 </div>
@@ -566,6 +601,93 @@ document.getElementById("resetWeek").onclick = () => {
     save(); render();
   }
 };
+
+// ====== HISTORIAL ======
+function dowFromISO(ds) {
+  const p = ds.split("-");
+  return (new Date(+p[0], +p[1] - 1, +p[2]).getDay() + 6) % 7;
+}
+function weekKeyOf(ds) {
+  const p = ds.split("-");
+  const d = new Date(+p[0], +p[1] - 1, +p[2]);
+  const lunes = new Date(d);
+  lunes.setDate(d.getDate() - planIndex(d));
+  return hoyISO(lunes);
+}
+function minutosDelDia(ds) {
+  const idx = dowFromISO(ds), checks = state.dias[ds] || [];
+  let min = 0;
+  checks.forEach((c, i) => { if (c && PLAN[idx].bloques[i]) min += PLAN[idx].bloques[i].min; });
+  return min;
+}
+
+function renderHistorial() {
+  const dates = Object.keys(state.dias).filter(ds => (state.dias[ds] || []).some(Boolean)).sort().reverse();
+  let totalMin = 0, completos = 0;
+  dates.forEach(ds => {
+    totalMin += minutosDelDia(ds);
+    if (state.dias[ds].filter(Boolean).length === 6) completos++;
+  });
+  // mejor racha de días completos consecutivos
+  const completeAsc = dates.filter(ds => state.dias[ds].filter(Boolean).length === 6).sort();
+  let maxStreak = 0, cur = 0, prev = null;
+  completeAsc.forEach(ds => {
+    const p = ds.split("-"), cur_d = new Date(+p[0], +p[1] - 1, +p[2]);
+    cur = (prev && (cur_d - prev) / 86400000 === 1) ? cur + 1 : 1;
+    if (cur > maxStreak) maxStreak = cur;
+    prev = cur_d;
+  });
+
+  document.getElementById("histStats").innerHTML = `
+    <div class="hist-stat"><div class="n">${dates.length}</div><div class="l">Días estudiados</div></div>
+    <div class="hist-stat"><div class="n">${completos}</div><div class="l">Días completos</div></div>
+    <div class="hist-stat"><div class="n">${Math.round(totalMin / 60)}h</div><div class="l">Tiempo total</div></div>
+    <div class="hist-stat"><div class="n">${maxStreak}</div><div class="l">Mejor racha</div></div>`;
+
+  const list = document.getElementById("histList");
+  if (!dates.length) {
+    list.innerHTML = `<div class="hist-empty">Aún no hay días registrados.<br>Marca tus bloques del día y aparecerán aquí. 📚</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  let lastWeek = null;
+  dates.forEach(ds => {
+    const wk = weekKeyOf(ds);
+    if (wk !== lastWeek) {
+      lastWeek = wk;
+      const h = document.createElement("div");
+      h.className = "hist-week-h";
+      const wp = wk.split("-");
+      h.textContent = "Semana del " + wp[2] + "/" + wp[1] + "/" + wp[0];
+      list.appendChild(h);
+    }
+    const idx = dowFromISO(ds), checks = state.dias[ds], done = checks.filter(Boolean).length;
+    const full = done === 6, [y, m, d] = ds.split("-");
+    const item = document.createElement("div");
+    item.className = "hist-day-item" + (full ? " full" : "");
+    item.innerHTML = `
+      <div class="hist-day-top">
+        <div><span class="hist-day-name">${PLAN[idx].nombre}</span> <span class="hist-day-date">${d}/${m}/${y}</span></div>
+        <div class="hist-day-meta">${done}/6 · ${minutosDelDia(ds)} min${full ? " ✓" : ""}</div>
+      </div>
+      <div class="hist-bar"><div style="width:${done / 6 * 100}%"></div></div>`;
+    list.appendChild(item);
+  });
+}
+
+let currentView = "hoy";
+function switchView(v) {
+  currentView = v;
+  const hoy = v === "hoy";
+  document.getElementById("view-plan").style.display = hoy ? "" : "none";
+  document.getElementById("view-historial").style.display = hoy ? "none" : "";
+  document.getElementById("tab-hoy").classList.toggle("active", hoy);
+  document.getElementById("tab-hist").classList.toggle("active", !hoy);
+  if (!hoy) renderHistorial();
+  window.scrollTo(0, 0);
+}
+document.getElementById("tab-hoy").onclick = () => switchView("hoy");
+document.getElementById("tab-hist").onclick = () => switchView("hist");
 
 render();
 </script>

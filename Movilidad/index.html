@@ -249,6 +249,25 @@
     .video-info .title { font-size: 0.82rem; }
     .stat { min-width: 90px; padding: 10px 14px; }
   }
+
+  /* ── Conmutador de vista e Historial ── */
+  .view-tabs { display: flex; gap: 6px; max-width: 680px; margin: 0 auto 18px; padding: 0 16px; }
+  .view-tabs button {
+    flex: 1; border: 1px solid var(--border); background: var(--card); color: var(--text-dim);
+    border-radius: 999px; padding: 9px; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: all 0.15s;
+  }
+  .view-tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .hist-item { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; }
+  .hist-item.complete { border-color: rgba(52,199,89,0.4); }
+  .hist-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .hist-day { font-weight: 600; }
+  .hist-date { color: var(--text-dim); font-size: 0.82rem; font-weight: 500; }
+  .hist-count { font-size: 0.82rem; color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .hist-item.complete .hist-count { color: var(--done); }
+  .hist-vids { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .hist-vid { font-size: 0.8rem; color: var(--text-dim); padding-left: 18px; position: relative; line-height: 1.35; }
+  .hist-vid::before { content: "✓"; position: absolute; left: 0; color: var(--done); }
+  .hist-empty { text-align: center; color: var(--text-dim); padding: 44px 16px; font-size: 0.9rem; }
 </style>
 <script>
 /* Tema: sigue al sistema y permite que el hub lo imponga (postMessage). */
@@ -271,6 +290,12 @@
   <p>Tu plan semanal de sesiones</p>
 </header>
 
+<div class="view-tabs">
+  <button id="tab-plan" class="active">Esta semana</button>
+  <button id="tab-hist">Historial</button>
+</div>
+
+<div id="view-plan">
 <div class="stats">
   <div class="stat"><div class="num" id="stat-streak">0</div><div class="lbl">🔥 Racha (días)</div></div>
   <div class="stat"><div class="num" id="stat-week">0/7</div><div class="lbl">Días esta semana</div></div>
@@ -292,6 +317,12 @@
     <button onclick="resetAll()">Borrar todo el historial</button>
   </div>
 </main>
+</div>
+
+<div id="view-historial" style="display:none">
+  <div class="stats" id="hist-stats"></div>
+  <main><div id="hist-list"></div></main>
+</div>
 
 <script>
 // ── Catálogo de videos ──────────────────────────────────────────
@@ -438,8 +469,68 @@ function resetAll() {
     progress = {};
     save();
     render();
+    if (currentView === "hist") renderHistorial();
   }
 }
+
+// ── Historial ──
+const DAY_FULL = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+function dowFromDate(ds) {
+  const p = ds.split("-");
+  return (new Date(+p[0], +p[1] - 1, +p[2]).getDay() + 6) % 7;
+}
+
+function renderHistorial() {
+  const dates = Object.keys(progress).filter(ds => (progress[ds] || []).length).sort().reverse();
+  let completos = 0, totalVideos = 0;
+  dates.forEach(ds => {
+    const idx = dowFromDate(ds);
+    totalVideos += progress[ds].length;
+    if (isDayComplete(idx, ds)) completos++;
+  });
+  document.getElementById("hist-stats").innerHTML = `
+    <div class="stat"><div class="num">${dates.length}</div><div class="lbl">Días con sesión</div></div>
+    <div class="stat"><div class="num">${completos}</div><div class="lbl">Días completos</div></div>
+    <div class="stat"><div class="num">${totalVideos}</div><div class="lbl">Videos totales</div></div>`;
+
+  const list = document.getElementById("hist-list");
+  if (!dates.length) {
+    list.innerHTML = `<div class="hist-empty">Aún no has completado ninguna sesión.<br>Marca tus primeros videos y aparecerán aquí. 🧘</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  dates.forEach(ds => {
+    const idx = dowFromDate(ds);
+    const done = progress[ds];
+    const total = PLAN[idx].videos.length;
+    const complete = isDayComplete(idx, ds);
+    const [y, m, d] = ds.split("-");
+    const vids = done.map(k => VIDEOS[k] ? `<div class="hist-vid">${VIDEOS[k].title}</div>` : "").join("");
+    const item = document.createElement("div");
+    item.className = "hist-item" + (complete ? " complete" : "");
+    item.innerHTML = `
+      <div class="hist-row">
+        <div class="hist-day">${DAY_FULL[idx]} <span class="hist-date">${d}/${m}/${y}</span></div>
+        <div class="hist-count">${done.length}/${total} videos${complete ? " ✓" : ""}</div>
+      </div>
+      <div class="hist-vids">${vids}</div>`;
+    list.appendChild(item);
+  });
+}
+
+let currentView = "plan";
+function switchView(v) {
+  currentView = v;
+  const isPlan = v === "plan";
+  document.getElementById("view-plan").style.display = isPlan ? "" : "none";
+  document.getElementById("view-historial").style.display = isPlan ? "none" : "";
+  document.getElementById("tab-plan").classList.toggle("active", isPlan);
+  document.getElementById("tab-hist").classList.toggle("active", !isPlan);
+  if (!isPlan) renderHistorial();
+  window.scrollTo(0, 0);
+}
+document.getElementById("tab-plan").onclick = () => switchView("plan");
+document.getElementById("tab-hist").onclick = () => switchView("hist");
 
 render();
 </script>
