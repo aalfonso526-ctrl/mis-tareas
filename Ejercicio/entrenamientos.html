@@ -97,6 +97,18 @@
   textarea{width:100%; min-height:60px; resize:vertical;}
   .save-row{display:flex; gap:10px; margin-top:14px;}
   .save-row .btn{flex:1; padding:14px;}
+  /* progresión, récords y edición */
+  .pr-item{display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--border); font-size:.85rem;}
+  .pr-item:last-child{border-bottom:none;}
+  .pr-medal{font-size:1.05rem; width:22px; text-align:center;}
+  .pr-name{flex:1; min-width:0;}
+  .pr-val{font-weight:700; color:var(--accent2); white-space:nowrap;}
+  .pr-date{font-size:.72rem; color:var(--muted); white-space:nowrap;}
+  .chart-svg{width:100%; height:auto; display:block; margin-top:6px;}
+  .chart-empty{color:var(--muted); font-size:.85rem; text-align:center; padding:18px 0;}
+  .edit-set-row{display:flex; align-items:center; gap:8px; margin:6px 0; flex-wrap:wrap;}
+  .edit-set-row .num{width:42px; color:var(--muted); font-size:.8rem;}
+  .edit-set-row input[type=number]{width:62px;}
 </style>
 <script>
 /* Tema: sigue al sistema y permite que el hub lo imponga (postMessage). */
@@ -185,6 +197,15 @@
     <div class="card">
       <h2>📊 Progreso</h2>
       <div class="stat-grid" id="stats"></div>
+    </div>
+    <div class="card">
+      <h2>📈 Progresión y récords</h2>
+      <div id="prList"></div>
+      <div style="margin-top:14px;">
+        <label class="lbl">Ver progresión de peso:</label><br>
+        <select id="selEjProgreso" style="margin-top:4px; width:100%;"></select>
+      </div>
+      <div id="chartWrap"></div>
     </div>
     <div class="card">
       <h2>🗓️ Sesiones registradas</h2>
@@ -348,10 +369,12 @@
     <div class="card">
       <h2>🗑️ Datos</h2>
       <p class="muted">Todo se guarda localmente en este navegador.</p>
-      <div style="margin-top:10px; display:flex; gap:10px;">
+      <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn ghost small" onclick="exportarDatos()">Exportar respaldo</button>
+        <button class="btn ghost small" onclick="document.getElementById('importFile').click()">Importar respaldo</button>
         <button class="btn danger small" onclick="borrarTodo()">Borrar todo el historial</button>
       </div>
+      <input type="file" id="importFile" accept="application/json,.json" hidden>
     </div>
   </div>
 
@@ -727,6 +750,8 @@ function renderHistorial(){
     <div class="stat"><div class="big">${ult7}</div><div class="lab">Últimos 7 días</div></div>
     <div class="stat"><div class="big">${semanaActual}/12</div><div class="lab">Semana del plan</div></div>`;
 
+  renderProgreso();
+
   const list = document.getElementById("histList");
   if(!historial.length){
     list.innerHTML = `<div class="empty">Aún no hay sesiones guardadas.<br>¡Tu primera sesión te espera! 💪</div>`;
@@ -737,8 +762,33 @@ function renderHistorial(){
     const realIdx = historial.length - 1 - idx;
     const hechos = s.ejercicios.reduce((a, e) => a + e.sets.filter(x => x.done).length, 0);
     const totalSets = s.ejercicios.reduce((a, e) => a + e.sets.length, 0);
+    const editing = editIdx === realIdx;
     const div = document.createElement("div");
     div.className = "hist-item";
+    let detalle;
+    if(editing){
+      detalle = s.ejercicios.map((e, ei) => `
+        <div style="margin:10px 0 4px;"><strong>${e.nombre}</strong>
+          ${e.sets.map((x, si) => `
+            <div class="edit-set-row">
+              <span class="num">Set ${si + 1}</span>
+              <input type="number" step="2.5" min="0" value="${x.peso}" data-ei="${ei}" data-si="${si}" data-f="peso"><span class="lbl">lb</span>
+              <input type="number" min="0" value="${x.reps}" data-ei="${ei}" data-si="${si}" data-f="reps"><span class="lbl">reps</span>
+              <label class="lbl" style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" data-ei="${ei}" data-si="${si}" data-f="done" ${x.done ? "checked" : ""} style="width:18px;height:18px;accent-color:var(--accent2);">hecho</label>
+            </div>`).join("")}
+        </div>`).join("") +
+        `<label class="lbl" style="display:block;margin-top:8px;">Notas</label>
+         <textarea data-notas style="margin-top:4px;">${s.notas || ""}</textarea>
+         <div style="display:flex;gap:8px;margin-top:10px;">
+           <button class="btn ghost small" onclick="cancelarEdicion()" style="flex:1;">Cancelar</button>
+           <button class="btn green small" onclick="guardarEdicion(${realIdx})" style="flex:1;">Guardar cambios</button>
+         </div>`;
+    } else {
+      detalle = s.ejercicios.map(e => {
+        const setsTxt = e.sets.map(x => (x.peso || "—") + "lb×" + (x.reps || "—") + (x.done ? "✓" : "")).join(" · ");
+        return `<div style="margin:4px 0;"><strong>${e.nombre}:</strong> ${setsTxt}</div>`;
+      }).join("") + (s.notas ? `<div style="margin-top:6px;">📝 ${s.notas}</div>` : "");
+    }
     div.innerHTML = `
       <div class="hist-top">
         <div>
@@ -746,19 +796,104 @@ function renderHistorial(){
           <div class="muted">${fmtFecha(s.fecha)} · Semana ${s.semana} · ${hechos}/${totalSets} sets</div>
         </div>
         <div style="display:flex; gap:6px;">
-          <button class="btn ghost small" onclick="toggleDet(this)">Ver</button>
+          <button class="btn ghost small" onclick="toggleDet(this)">${editing ? "Ocultar" : "Ver"}</button>
+          <button class="btn ghost small" onclick="editarSesion(${realIdx})" title="Editar">✏️</button>
           <button class="btn danger small" onclick="borrarSesion(${realIdx})">🗑</button>
         </div>
       </div>
-      <div class="hist-det">
-        ${s.ejercicios.map(e => {
-          const setsTxt = e.sets.map(x => (x.peso || "—") + "lb×" + (x.reps || "—") + (x.done ? "✓" : "")).join(" · ");
-          return `<div style="margin:4px 0;"><strong>${e.nombre}:</strong> ${setsTxt}</div>`;
-        }).join("")}
-        ${s.notas ? `<div style="margin-top:6px;">📝 ${s.notas}</div>` : ""}
-      </div>`;
+      <div class="hist-det${editing ? " open" : ""}">${detalle}</div>`;
     list.appendChild(div);
   });
+}
+
+/* ----- Progresión de peso y récords personales ----- */
+function nombresEjerciciosHist(){
+  const set = new Set();
+  historial.forEach(s => s.ejercicios.forEach(e => {
+    if(e.sets.some(x => +x.peso > 0)) set.add(e.nombre);
+  }));
+  return [...set].sort();
+}
+function maxPesoSesion(s, nombre){
+  const e = s.ejercicios.find(x => x.nombre === nombre);
+  if(!e) return null;
+  const pesos = e.sets.map(x => +x.peso).filter(p => p > 0);
+  return pesos.length ? Math.max(...pesos) : null;
+}
+function calcularPRs(){
+  const prs = {};
+  historial.forEach(s => s.ejercicios.forEach(e => e.sets.forEach(x => {
+    const p = +x.peso;
+    if(p > 0 && (!prs[e.nombre] || p > prs[e.nombre].peso)) prs[e.nombre] = { peso: p, reps: x.reps, fecha: s.fecha };
+  })));
+  return prs;
+}
+function renderProgreso(){
+  const prCont = document.getElementById("prList");
+  const prs = calcularPRs();
+  const arr = Object.keys(prs).map(n => Object.assign({ nombre: n }, prs[n])).sort((a, b) => b.peso - a.peso);
+  if(!arr.length){
+    prCont.innerHTML = `<div class="chart-empty">Aún no hay récords. Registra el peso en tus sesiones y aquí verás tus mejores marcas. 🏅</div>`;
+  } else {
+    const medals = ["🥇", "🥈", "🥉"];
+    prCont.innerHTML = arr.slice(0, 8).map((r, i) =>
+      `<div class="pr-item"><span class="pr-medal">${medals[i] || "🏅"}</span><span class="pr-name">${r.nombre}</span><span class="pr-val">${r.peso} lb</span><span class="pr-date">${fmtFecha(r.fecha)}</span></div>`
+    ).join("");
+  }
+  const sel = document.getElementById("selEjProgreso");
+  const nombres = nombresEjerciciosHist();
+  const prev = sel.value;
+  sel.innerHTML = nombres.map(n => `<option>${n}</option>`).join("");
+  if(!nombres.length){ document.getElementById("chartWrap").innerHTML = `<div class="chart-empty">Registra sesiones con peso para ver tu progresión.</div>`; return; }
+  if(nombres.includes(prev)) sel.value = prev;
+  renderChart(sel.value);
+}
+function renderChart(nombre){
+  const wrap = document.getElementById("chartWrap");
+  const pts = [];
+  historial.forEach(s => { const m = maxPesoSesion(s, nombre); if(m != null) pts.push({ fecha: s.fecha, peso: m }); });
+  if(!pts.length){ wrap.innerHTML = `<div class="chart-empty">Sin datos de peso para este ejercicio todavía.</div>`; return; }
+  const W = 320, H = 170, pad = 32;
+  const pesos = pts.map(p => p.peso);
+  let min = Math.min(...pesos), max = Math.max(...pesos);
+  if(min === max){ min = Math.max(0, min - 5); max = max + 5; }
+  const n = pts.length;
+  const X = i => n === 1 ? W / 2 : pad + (W - 2 * pad) * i / (n - 1);
+  const Y = v => (H - pad) - (H - 2 * pad) * (v - min) / (max - min);
+  const linea = pts.map((p, i) => `${X(i).toFixed(1)},${Y(p.peso).toFixed(1)}`).join(" ");
+  const dots = pts.map((p, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.peso).toFixed(1)}" r="3.5" fill="var(--accent)"/>`).join("");
+  const fmt = iso => { const d = new Date(iso); return d.getDate() + "/" + (d.getMonth() + 1); };
+  wrap.innerHTML = `
+    <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <line x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}" stroke="var(--border)"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H - pad}" stroke="var(--border)"/>
+      <text x="6" y="${pad + 4}" fill="var(--muted)" font-size="9">${max}</text>
+      <text x="6" y="${H - pad}" fill="var(--muted)" font-size="9">${min}</text>
+      <text x="${pad}" y="${H - 8}" fill="var(--muted)" font-size="9">${fmt(pts[0].fecha)}</text>
+      <text x="${W - pad}" y="${H - 8}" fill="var(--muted)" font-size="9" text-anchor="end">${fmt(pts[n - 1].fecha)}</text>
+      ${n > 1 ? `<polyline points="${linea}" fill="none" stroke="var(--accent)" stroke-width="2"/>` : ""}
+      ${dots}
+      <text x="${W - pad}" y="${pad - 4}" fill="var(--accent2)" font-size="10" text-anchor="end" font-weight="bold">máx ${max} lb</text>
+    </svg>`;
+}
+
+/* ----- Editar una sesión pasada ----- */
+let editIdx = null;
+function editarSesion(idx){ editIdx = (editIdx === idx) ? null : idx; renderHistorial(); }
+function cancelarEdicion(){ editIdx = null; renderHistorial(); }
+function guardarEdicion(idx){
+  const det = document.querySelector(".hist-det.open");
+  if(!det){ editIdx = null; return; }
+  det.querySelectorAll("input[data-f]").forEach(inp => {
+    const set = historial[idx].ejercicios[+inp.dataset.ei].sets[+inp.dataset.si];
+    if(inp.dataset.f === "done") set.done = inp.checked;
+    else set[inp.dataset.f] = inp.value;
+  });
+  const ta = det.querySelector("textarea[data-notas]");
+  if(ta) historial[idx].notas = ta.value;
+  saveHist();
+  editIdx = null;
+  renderHistorial(); renderPlan();
 }
 
 function toggleDet(btn){
@@ -788,6 +923,34 @@ function exportarDatos(){
   a.download = "respaldo_entrenamientos_" + new Date().toISOString().slice(0, 10) + ".json";
   a.click();
 }
+function importarDatos(file){
+  const rd = new FileReader();
+  rd.onload = () => {
+    let data;
+    try { data = JSON.parse(rd.result); } catch(e) { alert("El archivo no es válido."); return; }
+    let hist = null, conf = null, drf;
+    if(data && data.data && typeof data.data === "object"){
+      // respaldo global de Mi Diario
+      try { if(data.data.entreno_historial_v1) hist = JSON.parse(data.data.entreno_historial_v1); } catch(e){}
+      try { if(data.data.entreno_cfg_v1) conf = JSON.parse(data.data.entreno_cfg_v1); } catch(e){}
+      try { if(data.data.entreno_draft_v1) drf = data.data.entreno_draft_v1; } catch(e){}
+    } else if(Array.isArray(data.historial)){
+      hist = data.historial; conf = data.cfg || null;
+    }
+    if(!Array.isArray(hist)){ alert("El archivo no contiene un respaldo de Ejercicio."); return; }
+    if(!confirm("Esto reemplazará tu historial y configuración actuales de Ejercicio. ¿Continuar?")) return;
+    localStorage.setItem(LS_HIST, JSON.stringify(hist));
+    if(conf) localStorage.setItem(LS_CFG, JSON.stringify(conf));
+    if(drf !== undefined) localStorage.setItem(LS_DRAFT, drf);
+    location.reload();
+  };
+  rd.readAsText(file);
+}
+document.getElementById("importFile").addEventListener("change", function(){
+  if(this.files && this.files[0]) importarDatos(this.files[0]);
+  this.value = "";
+});
+document.getElementById("selEjProgreso").addEventListener("change", function(){ renderChart(this.value); });
 
 /* ================== INICIO ================== */
 const wAuto = semanaCalculada();

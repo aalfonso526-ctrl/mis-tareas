@@ -268,6 +268,22 @@
   .hist-vid { font-size: 0.8rem; color: var(--text-dim); padding-left: 18px; position: relative; line-height: 1.35; }
   .hist-vid::before { content: "✓"; position: absolute; left: 0; color: var(--done); }
   .hist-empty { text-align: center; color: var(--text-dim); padding: 44px 16px; font-size: 0.9rem; }
+
+  /* miniatura como botón */
+  button.thumb { border: 0; padding: 0; cursor: pointer; }
+  .video-info .meta a { color: var(--accent); text-decoration: none; }
+
+  /* fila para registrar un día pasado */
+  .pick-row { max-width: 680px; margin: 0 auto 14px; padding: 0 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.82rem; color: var(--text-dim); }
+  .pick-row input[type=date] { background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 10px; font-family: inherit; font-size: 0.82rem; }
+  .pick-row #clearPick { background: var(--accent-soft); color: var(--accent); border: none; border-radius: 999px; padding: 6px 12px; font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+
+  /* modal de video embebido */
+  .vid-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 100; }
+  .vid-box { width: 100%; max-width: 720px; }
+  .vid-frame { position: relative; width: 100%; padding-bottom: 56.25%; height: 0; border-radius: 12px; overflow: hidden; background: #000; }
+  .vid-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .vid-close { margin-top: 12px; width: 100%; background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
 </style>
 <script>
 /* Tema: sigue al sistema y permite que el hub lo imponga (postMessage). */
@@ -304,6 +320,12 @@
 
 <div class="week-nav" id="week-nav"></div>
 
+<div class="pick-row">
+  <span>📅 Registrar otro día:</span>
+  <input type="date" id="pickDate">
+  <button id="clearPick" type="button" style="display:none;">Volver a esta semana</button>
+</div>
+
 <main>
   <div class="day-header">
     <h2 id="day-title"></h2>
@@ -314,9 +336,19 @@
   <div class="all-done" id="all-done">✅ ¡Sesión completada! Buen trabajo.</div>
 
   <div class="footer-actions">
-    <button onclick="resetAll()">Borrar todo el historial</button>
+    <button onclick="exportarMov()">Exportar respaldo</button>
+    <button onclick="document.getElementById('movImport').click()">Importar respaldo</button>
+    <button onclick="resetAll()">Borrar todo</button>
   </div>
 </main>
+</div>
+<input type="file" id="movImport" accept="application/json,.json" hidden>
+
+<div id="vidModal" class="vid-modal" style="display:none;">
+  <div class="vid-box">
+    <div class="vid-frame" id="vidFrame"></div>
+    <button class="vid-close" id="vidClose" type="button">Cerrar ✕</button>
+  </div>
 </div>
 
 <div id="view-historial" style="display:none">
@@ -350,6 +382,7 @@ const SHORT = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
 
 let progress = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
 let selectedDay = todayIndex(); // 0-6, lunes=0
+let overrideDate = null;        // fecha YYYY-MM-DD elegida a mano para registrar un día pasado
 
 function save() { localStorage.setItem(STORE_KEY, JSON.stringify(progress)); }
 
@@ -406,6 +439,10 @@ function computeStreak() {
 }
 
 function render() {
+  // Día activo: el del calendario semanal, o uno pasado elegido a mano (overrideDate)
+  const dateStr = overrideDate || dateOfWeekDay(selectedDay);
+  const activeIdx = overrideDate ? dowFromDate(overrideDate) : selectedDay;
+
   // ── Navegación de días ──
   const nav = document.getElementById("week-nav");
   nav.innerHTML = "";
@@ -413,22 +450,21 @@ function render() {
     const ds = dateOfWeekDay(i);
     const pill = document.createElement("button");
     pill.className = "day-pill";
-    if (i === selectedDay) pill.classList.add("active");
+    if (!overrideDate && i === selectedDay) pill.classList.add("active");
     if (i === todayIndex()) pill.classList.add("today");
     const complete = isDayComplete(i, ds);
     if (complete) pill.classList.add("complete");
     pill.innerHTML = SHORT[i] + (complete ? '<span class="check">✓</span>' : "");
-    pill.onclick = () => { selectedDay = i; render(); };
+    pill.onclick = () => { selectedDay = i; overrideDate = null; syncPick(); render(); };
     nav.appendChild(pill);
   }
 
   // ── Día seleccionado ──
-  const dateStr = dateOfWeekDay(selectedDay);
-  const day = PLAN[selectedDay];
+  const day = PLAN[activeIdx];
   const done = getDone(dateStr);
 
-  const isToday = selectedDay === todayIndex();
-  document.getElementById("day-title").textContent = day.name + (isToday ? " · Hoy" : "");
+  const isToday = !overrideDate && selectedDay === todayIndex();
+  document.getElementById("day-title").textContent = day.name + (isToday ? " · Hoy" : (overrideDate ? " · día pasado" : ""));
   const [y, m, d] = dateStr.split("-");
   document.getElementById("day-date").textContent = `${d}/${m}/${y}`;
 
@@ -440,17 +476,18 @@ function render() {
     const card = document.createElement("div");
     card.className = "video-card" + (isDone ? " done" : "");
     card.innerHTML = `
-      <a class="thumb" href="https://www.youtube.com/watch?v=${video.id}" target="_blank" rel="noopener">
+      <button type="button" class="thumb" title="Reproducir aquí">
         <img src="https://img.youtube.com/vi/${video.id}/mqdefault.jpg" alt="" loading="lazy">
         <span class="play">▶</span>
-      </a>
+      </button>
       <div class="video-info">
         ${v.optional ? '<span class="tag-optional">Opcional · si te sientes rígido</span><br>' : ""}
         <div class="title">${video.title}</div>
-        <div class="meta">YouTube · clic en la miniatura para ver</div>
+        <div class="meta">Toca la miniatura para verlo aquí · <a href="https://www.youtube.com/watch?v=${video.id}" target="_blank" rel="noopener">YouTube ↗</a></div>
       </div>
       <button class="check-btn${isDone ? " checked" : ""}" title="Marcar como hecho">✓</button>
     `;
+    card.querySelector(".thumb").onclick = () => openVideo(video.id, video.title);
     card.querySelector(".check-btn").onclick = () => toggle(dateStr, v.k);
     list.appendChild(card);
   });
@@ -459,7 +496,7 @@ function render() {
   const requiredCount = day.videos.length;
   const doneCount = day.videos.filter(v => done.includes(v.k)).length;
   document.getElementById("day-fill").style.width = (requiredCount ? (doneCount / requiredCount) * 100 : 0) + "%";
-  document.getElementById("all-done").classList.toggle("show", isDayComplete(selectedDay, dateStr));
+  document.getElementById("all-done").classList.toggle("show", isDayComplete(activeIdx, dateStr));
 
   // ── Estadísticas ──
   let weekDays = 0;
@@ -537,6 +574,61 @@ function switchView(v) {
 }
 document.getElementById("tab-plan").onclick = () => switchView("plan");
 document.getElementById("tab-hist").onclick = () => switchView("hist");
+
+// ── Registrar un día pasado ──
+const pickInput = document.getElementById("pickDate");
+const clearPickBtn = document.getElementById("clearPick");
+pickInput.max = isoLocal(new Date());
+function syncPick() {
+  pickInput.value = overrideDate || "";
+  clearPickBtn.style.display = overrideDate ? "" : "none";
+}
+pickInput.onchange = () => {
+  if (pickInput.value) { overrideDate = pickInput.value; selectedDay = dowFromDate(overrideDate); clearPickBtn.style.display = ""; render(); }
+};
+clearPickBtn.onclick = () => { overrideDate = null; selectedDay = todayIndex(); syncPick(); render(); };
+
+// ── Reproductor de video embebido ──
+function openVideo(id, title) {
+  document.getElementById("vidFrame").innerHTML =
+    `<iframe src="https://www.youtube.com/embed/${id}?autoplay=1&rel=0" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen title="${(title || "").replace(/"/g, "")}"></iframe>`;
+  document.getElementById("vidModal").style.display = "flex";
+}
+function closeVideo() {
+  document.getElementById("vidFrame").innerHTML = "";
+  document.getElementById("vidModal").style.display = "none";
+}
+document.getElementById("vidClose").onclick = closeVideo;
+document.getElementById("vidModal").onclick = (e) => { if (e.target.id === "vidModal") closeVideo(); };
+
+// ── Exportar / importar respaldo ──
+function exportarMov() {
+  const blob = new Blob([JSON.stringify({ _app: "movilidad", progress }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "movilidad-respaldo-" + isoLocal(new Date()) + ".json";
+  a.click();
+}
+function importarMov(file) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    let d;
+    try { d = JSON.parse(rd.result); } catch (e) { alert("El archivo no es válido."); return; }
+    let prog = null;
+    if (d && d.progress && typeof d.progress === "object") prog = d.progress;                       // respaldo de Movilidad
+    else if (d && d.data && d.data["movilidad-progress"]) { try { prog = JSON.parse(d.data["movilidad-progress"]); } catch (e) {} } // respaldo global Mi Diario
+    else if (d && typeof d === "object" && !d._app && !d.data) prog = d;                              // objeto progress directo
+    if (!prog || typeof prog !== "object") { alert("El archivo no contiene un respaldo de Movilidad."); return; }
+    if (!confirm("Esto reemplazará tu progreso de movilidad actual. ¿Continuar?")) return;
+    progress = prog; save(); render();
+    if (currentView === "hist") renderHistorial();
+  };
+  rd.readAsText(file);
+}
+document.getElementById("movImport").addEventListener("change", function () {
+  if (this.files && this.files[0]) importarMov(this.files[0]);
+  this.value = "";
+});
 
 render();
 </script>

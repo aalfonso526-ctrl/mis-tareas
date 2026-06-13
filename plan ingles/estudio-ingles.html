@@ -191,6 +191,9 @@
   .hist-bar { height: 6px; background: var(--card2); border-radius: 4px; overflow: hidden; margin-top: 8px; }
   .hist-bar div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
   .hist-empty { text-align: center; color: var(--muted); padding: 44px 16px; font-size: .9rem; }
+  .section textarea { width: 100%; min-height: 130px; background: var(--card2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 10px; font-family: inherit; font-size: .9rem; resize: vertical; }
+  #remHora { background: var(--card2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 10px; font-family: inherit; font-size: .85rem; }
+  #remBanner { display: none; background: var(--card2); color: var(--accent); text-align: center; padding: 10px 16px; font-size: .85rem; font-weight: 600; cursor: pointer; border-bottom: 1px solid var(--border); }
 </style>
 <script>
 /* Tema: sigue al sistema y permite que el hub lo imponga (postMessage). */
@@ -213,6 +216,8 @@
   <p>2 h 30 min diarias · Escuchar → imitar → entender → guardar → practicar → hablar → escribir</p>
   <div class="streak" id="streak"></div>
 </header>
+
+<div id="remBanner">🔔 Aún te faltan bloques de inglés hoy · toca para ir al plan</div>
 
 <div class="container">
 
@@ -243,11 +248,39 @@
   </div>
 
   <div class="section">
+    <h3>✍️ Mi writing de hoy</h3>
+    <textarea id="writingArea" placeholder="Pega o escribe aquí tu texto del día (el plan lo pide varios días). Se guarda solo."></textarea>
+    <div class="g-meta" id="writingSaved" style="margin-top:6px;"></div>
+  </div>
+
+  <div class="section">
     <h3>📊 Metas de la semana <span style="font-size:.75rem;color:var(--muted)" id="weekLabel"></span></h3>
     <div class="goals-grid" id="goalsGrid"></div>
     <div class="week-summary" id="weekSummary"></div>
     <div class="anki-note">💡 Regla de oro de Anki: nunca tarjetas de palabras sueltas, siempre frases completas. Mazos: <b>English Daily Sentences</b>, <b>My Mistakes</b>, <b>Listening Vocabulary</b>, <b>Useful Questions</b>.</div>
     <button class="reset-btn" id="resetWeek">Reiniciar semana (nueva semana de estudio)</button>
+  </div>
+
+  <div class="section">
+    <h3>🔔 Recordatorio diario</h3>
+    <label style="display:flex;align-items:center;gap:10px;font-size:.9rem;cursor:pointer;">
+      <input type="checkbox" id="remOn" style="width:18px;height:18px;accent-color:var(--accent);">
+      Avisarme si no he terminado mis bloques
+    </label>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span class="g-name">A las</span>
+      <input type="time" id="remHora" value="19:00">
+    </div>
+    <div class="anki-note" id="remNote">El aviso llega mientras la app esté abierta (también en segundo plano). Para recibirlo con la app cerrada, instálala desde el navegador y permite notificaciones.</div>
+  </div>
+
+  <div class="section">
+    <h3>💾 Datos y respaldo</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="reset-btn" id="exportIng">Exportar respaldo</button>
+      <button class="reset-btn" id="importIngBtn">Importar respaldo</button>
+    </div>
+    <input type="file" id="importIng" accept="application/json,.json" hidden>
   </div>
   </div>
 
@@ -388,6 +421,8 @@ function save() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 let state = load();
 state.dias = state.dias || {};       // "YYYY-MM-DD" -> [bool x6]
 state.semana = state.semana || {};   // weekKey -> { frases: n, ... }
+state.writing = state.writing || {}; // "YYYY-MM-DD" -> texto del writing
+state.recordatorio = state.recordatorio || { on: false, hora: "19:00" }; // aviso diario
 
 function hoyISO(d) {
   d = d || new Date();
@@ -476,6 +511,20 @@ function renderDia() {
     li.textContent = p;
     ul.appendChild(li);
   });
+
+  // Writing del día seleccionado (se guarda por fecha)
+  const wDate = fechaDeDia(diaSel);
+  const wa = document.getElementById("writingArea");
+  const wSaved = document.getElementById("writingSaved");
+  wa.value = (state.writing && state.writing[wDate]) || "";
+  wSaved.textContent = wa.value ? "Guardado ✓" : "";
+  wa.oninput = () => {
+    state.writing = state.writing || {};
+    if (wa.value.trim()) state.writing[wDate] = wa.value;
+    else delete state.writing[wDate];
+    save();
+    wSaved.textContent = "Guardado ✓";
+  };
 }
 
 function semanaActual() {
@@ -521,18 +570,21 @@ function renderGoals() {
     `Metas cumplidas: ${cumplidas}/${GOALS.length}. La métrica más importante: ¿puedes hablar 2 minutos en inglés sobre tu rutina, tu pasado y tus planes?`;
 }
 
+const UMBRAL_RACHA = 4; // un día "cuenta" para la racha con al menos 4 de 6 bloques (crédito parcial)
 function renderStreak() {
-  // racha = días consecutivos (hacia atrás desde hoy o ayer) con los 6 bloques completos
+  // racha = días consecutivos (hacia atrás desde hoy o ayer) con ≥ UMBRAL_RACHA bloques
   let racha = 0;
   const d = new Date();
-  const hoyCompleto = (state.dias[hoyISO(d)] || []).filter(Boolean).length === 6;
-  if (!hoyCompleto) d.setDate(d.getDate() - 1);
+  const hoyActivo = (state.dias[hoyISO(d)] || []).filter(Boolean).length >= UMBRAL_RACHA;
+  if (!hoyActivo) d.setDate(d.getDate() - 1); // si hoy aún no llega al umbral, no rompe: cuenta desde ayer
   while (true) {
     const checks = state.dias[hoyISO(d)];
-    if (checks && checks.filter(Boolean).length === 6) { racha++; d.setDate(d.getDate() - 1); }
+    if (checks && checks.filter(Boolean).length >= UMBRAL_RACHA) { racha++; d.setDate(d.getDate() - 1); }
     else break;
   }
-  document.getElementById("streak").textContent = racha > 0 ? `🔥 Racha: ${racha} día${racha > 1 ? "s" : ""} completos` : "";
+  document.getElementById("streak").textContent = racha > 0
+    ? `🔥 Racha: ${racha} día${racha > 1 ? "s" : ""} activos (≥${UMBRAL_RACHA}/6 bloques)`
+    : "";
 }
 
 function render() { renderTabs(); renderDia(); renderGoals(); renderStreak(); }
@@ -601,6 +653,71 @@ document.getElementById("resetWeek").onclick = () => {
     save(); render();
   }
 };
+
+// ====== RECORDATORIO ======
+const remOn = document.getElementById("remOn");
+const remHora = document.getElementById("remHora");
+const remBanner = document.getElementById("remBanner");
+remOn.checked = !!state.recordatorio.on;
+remHora.value = state.recordatorio.hora || "19:00";
+remOn.onchange = () => {
+  state.recordatorio.on = remOn.checked; save();
+  if (remOn.checked && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  checkRecordatorio();
+};
+remHora.onchange = () => { state.recordatorio.hora = remHora.value; state.recordatorio.lastNotif = null; save(); };
+remBanner.onclick = () => { remBanner.style.display = "none"; window.scrollTo(0, 0); };
+
+function checkRecordatorio() {
+  const hoy = hoyISO();
+  const completados = (state.dias[hoy] || []).filter(Boolean).length;
+  if (!state.recordatorio.on || completados === 6) { remBanner.style.display = "none"; return; }
+  const now = new Date();
+  const [h, m] = (state.recordatorio.hora || "19:00").split(":").map(Number);
+  const pasada = now.getHours() > h || (now.getHours() === h && now.getMinutes() >= m);
+  if (!pasada) return;
+  remBanner.style.display = "block";
+  if (state.recordatorio.lastNotif !== hoy) {
+    state.recordatorio.lastNotif = hoy; save();
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification("🇬🇧 Tu inglés de hoy", { body: `Te faltan ${6 - completados} bloque(s) por hacer hoy.` });
+    }
+  }
+}
+checkRecordatorio();
+setInterval(checkRecordatorio, 60000);
+
+// ====== EXPORTAR / IMPORTAR ======
+document.getElementById("exportIng").onclick = () => {
+  const blob = new Blob([JSON.stringify({ _app: "ingles", state }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ingles-respaldo-" + hoyISO() + ".json";
+  a.click();
+};
+document.getElementById("importIngBtn").onclick = () => document.getElementById("importIng").click();
+document.getElementById("importIng").addEventListener("change", function () {
+  const file = this.files && this.files[0];
+  this.value = "";
+  if (!file) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    let d, nuevo = null;
+    try { d = JSON.parse(rd.result); } catch (e) { alert("El archivo no es válido."); return; }
+    if (d && d.state && d.state.dias) nuevo = d.state;                                   // respaldo de Inglés
+    else if (d && d.data && d.data.planIngles_v1) { try { nuevo = JSON.parse(d.data.planIngles_v1); } catch (e) {} } // respaldo global
+    else if (d && d.dias) nuevo = d;                                                      // estado directo
+    if (!nuevo || !nuevo.dias) { alert("El archivo no contiene un respaldo de Inglés."); return; }
+    if (!confirm("Esto reemplazará tu progreso de inglés actual. ¿Continuar?")) return;
+    state = nuevo;
+    state.dias = state.dias || {}; state.semana = state.semana || {};
+    state.writing = state.writing || {}; state.recordatorio = state.recordatorio || { on: false, hora: "19:00" };
+    save();
+    remOn.checked = !!state.recordatorio.on; remHora.value = state.recordatorio.hora || "19:00";
+    render(); if (typeof renderHistorial === "function") renderHistorial();
+  };
+  rd.readAsText(file);
+});
 
 // ====== HISTORIAL ======
 function dowFromISO(ds) {
